@@ -19,6 +19,7 @@ export async function GET() {
     'groups:read',
     'im:read',
     'mpim:read',
+    'users:read',
   ].join(',');
 
   const slackAuthUrl = `https://slack.com/oauth/v2/authorize?client_id=${clientId}&scope=${encodeURIComponent(scopes)}&user_scope=${encodeURIComponent(userScopes)}&redirect_uri=${encodeURIComponent(redirectUri)}`;
