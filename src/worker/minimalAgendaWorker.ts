@@ -2,6 +2,7 @@ import Agenda from 'agenda';
 import dotenv from 'dotenv';
 import path from 'path';
 import { ObjectId } from 'mongodb';
+import http from 'http';
 
 dotenv.config({ path: path.join(__dirname, '../../.env.local') });
 
@@ -42,8 +43,11 @@ const agenda = new Agenda({
   defaultConcurrency: 2,
 });
 
+let agendaReady = false;
+
 agenda.on('ready', () => {
   console.log('[Worker] Agenda ready!');
+  agendaReady = true;
 });
 agenda.on('error', (err) => {
   console.error('[Worker] Agenda error:', err);
@@ -158,14 +162,55 @@ agenda.define('send-scheduled-message', { concurrency: 2 }, async (job: any) => 
   await processScheduledMessageJob(job, agenda);
 });
 
+// Create a simple HTTP server for Render health checks
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ 
+    status: 'ok', 
+    service: 'slackconnect-worker',
+    timestamp: new Date().toISOString(),
+    agenda: agendaReady ? 'ready' : 'starting'
+  }));
+});
+
+const PORT = parseInt(process.env.PORT || '3001', 10);
+
 (async () => {
   console.log('[Worker] About to start Agenda...');
   try {
     const startPromise = agenda.start();
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Agenda start timed out')), 10000));
+    const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Agenda start timed out')), 10000));
     await Promise.race([startPromise, timeout]);
     console.log('[Worker] Agenda started');
+    
+    // Start HTTP server after Agenda is ready
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log(`[Worker] HTTP server listening on port ${PORT}`);
+      console.log(`[Worker] Health check available at http://0.0.0.0:${PORT}`);
+    });
   } catch (err) {
     console.error('[Worker] Agenda failed to start:', err);
+    process.exit(1);
   }
-})(); 
+})();
+
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('[Worker] Received SIGTERM, shutting down gracefully...');
+  server.close(() => {
+    console.log('[Worker] HTTP server closed');
+  });
+  await agenda.stop();
+  console.log('[Worker] Agenda stopped');
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  console.log('[Worker] Received SIGINT, shutting down gracefully...');
+  server.close(() => {
+    console.log('[Worker] HTTP server closed');
+  });
+  await agenda.stop();
+  console.log('[Worker] Agenda stopped');
+  process.exit(0);
+}); 

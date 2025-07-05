@@ -6,7 +6,8 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "worker": "tsx src/worker/minimalAgendaWorker.ts"
   },
   "dependencies": {
     "agenda": "^4.3.0",
