@@ -1,5 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { makeSlackApiCall } from '@/lib/slackTokenManager';
+interface SlackChannel {
+  id: string;
+  name: string;
+  is_private: boolean;
+  is_im: boolean;
+  is_mpim: boolean;
+  is_archived?: boolean;
+  num_members?: number;
+  topic?: { value: string };
+  purpose?: { value: string };
+  created?: number;
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -16,7 +28,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: channelsResponse.error }, { status: 400 });
     }
 
-    const channels = channelsResponse.channels.map((channel: any) => ({
+    const channels = channelsResponse.channels.map((channel: SlackChannel) => ({
       id: channel.id,
       name: channel.name,
       is_private: channel.is_private,

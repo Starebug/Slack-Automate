@@ -13,7 +13,7 @@ interface SentMessage {
     timestamp: string;
     status: 'success' | 'failure';
     error?: string;
-    response?: any;
+    response?: Record<string, unknown>;
   }>;
 }
 

@@ -5,6 +5,36 @@ import { ObjectId } from 'mongodb';
 
 dotenv.config({ path: path.join(__dirname, '../../.env.local') });
 
+interface DeliveryAttempt {
+  timestamp: Date;
+  status: 'success' | 'failure';
+  error?: string;
+  response?: unknown;
+}
+
+interface MessageDelivery {
+  _id: ObjectId;
+  userId: ObjectId;
+  messageId: ObjectId;
+  slackUserId: string;
+  slackChannelId: string;
+  type: 'immediate' | 'scheduled';
+  scheduledTime?: Date;
+  status: 'queued' | 'sent' | 'failed' | 'cancelled';
+  attempts?: DeliveryAttempt[];
+}
+
+interface User {
+  _id: ObjectId;
+  slackUserId: string;
+  slackUserAccessToken: string;
+}
+
+interface Message {
+  _id: ObjectId;
+  text: string;
+}
+
 const agenda = new Agenda({
   db: { address: process.env.MONGODB_URI!, collection: 'agendaJobs' },
   processEvery: '10 seconds',
@@ -19,16 +49,17 @@ agenda.on('error', (err) => {
   console.error('[Worker] Agenda error:', err);
 });
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function processScheduledMessageJob(job: any, agenda: Agenda) {
   const { deliveryId } = job.attrs.data as { deliveryId: string };
   if (!deliveryId) return;
 
   const db = agenda._mdb;
-  const delivery = await db.collection('messagedeliveries').findOne({ _id: new ObjectId(deliveryId) });
+  const delivery = await db.collection('messagedeliveries').findOne({ _id: new ObjectId(deliveryId) }) as MessageDelivery | null;
   if (!delivery || delivery.status !== 'queued') return;
 
-  const user = await db.collection('users').findOne({ _id: delivery.userId });
-  const message = await db.collection('messages').findOne({ _id: delivery.messageId });
+  const user = await db.collection('users').findOne({ _id: delivery.userId }) as User | null;
+  const message = await db.collection('messages').findOne({ _id: delivery.messageId }) as Message | null;
 
   if (!user || !user.slackUserId || !user.slackUserAccessToken) {
     await db.collection('messagedeliveries').updateOne(
@@ -42,7 +73,7 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
             error: 'User or slackUserId or access token not found',
           } ] }
         },
-      } as any
+      }
     );
     return;
   }
@@ -75,7 +106,7 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
               response: responseData,
             } ] }
           },
-        } as any
+        }
       );
       console.log('[Worker] Message sent successfully for delivery', deliveryId);
     } else {
@@ -95,7 +126,7 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
               response: responseData,
             } ] }
           },
-        } as any
+        }
       );
       console.log('[Worker] Message failed for delivery', deliveryId, 'Error:', responseData.error);
     }
@@ -116,12 +147,13 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
             error: error instanceof Error ? error.message : 'Unknown error',
           } ] }
         },
-      } as any
+      }
     );
     console.error('[Worker] Error processing delivery', deliveryId, error);
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 agenda.define('send-scheduled-message', { concurrency: 2 }, async (job: any) => {
   await processScheduledMessageJob(job, agenda);
 });

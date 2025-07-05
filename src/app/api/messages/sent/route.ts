@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/session';
 import { getMongoClient } from '@/lib/mongoClient';
-import { ObjectId } from 'mongodb';
 
 export async function GET(request: NextRequest) {
   try {

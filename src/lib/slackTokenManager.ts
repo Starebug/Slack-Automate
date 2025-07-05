@@ -1,4 +1,3 @@
-import { access } from 'fs/promises';
 import { getMongoClient } from './mongoClient';
 import { getSession } from './session';
 

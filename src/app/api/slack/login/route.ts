@@ -1,6 +1,6 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 
-export async function GET(req: NextRequest) {
+export async function GET() {
   const clientId = process.env.AUTH_SLACK_ID!;
   const redirectUri = process.env.AUTH_REDIRECT_URI!;
   

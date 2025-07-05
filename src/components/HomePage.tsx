@@ -21,6 +21,7 @@ export default function Home() {
         router.push('/dashboard');
         return;
       } catch (e) {
+        console.log('Error decoding token:', e);
       }
     }
     router.push('/login');

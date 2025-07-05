@@ -23,6 +23,7 @@ export default function DashboardPage() {
     try {
       await fetch('/api/signout', { method: 'POST' });
     } catch (e) {
+      console.log('Error signing out:', e);
     }
     window.location.href = '/login';
   };
@@ -59,10 +60,10 @@ export default function DashboardPage() {
               <div className="flex items-center space-x-3">
                 <div className="text-right">
                   <p className="text-sm font-medium text-slate-900">
-                    {user.slackUserId || 'Slack User'}
+                    {user!.slackUserId || 'Slack User'}
                   </p>
                   <p className="text-xs text-slate-500">
-                    {user.email || 'slack@example.com'}
+                    {user!.email || 'slack@example.com'}
                   </p>
                 </div>
               </div>
