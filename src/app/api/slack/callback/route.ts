@@ -55,7 +55,7 @@ export async function GET(req: NextRequest) {
       });
       const userInfo = await userInfoResponse.json();
       console.log('[Slack OAuth Callback] Slack user info response:', userInfo);
-      email = userInfo.user?.profile?.email;
+      email = userInfo.user?.profile?.email || userInfo.user?.name;
     } catch (e) {
       console.error('[Slack OAuth Callback] Failed to fetch user email:', e);
     }
