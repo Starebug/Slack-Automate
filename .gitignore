@@ -35,7 +35,10 @@ yarn-error.log*
 
 # vercel
 .vercel
-
+SETUP.md
+SCHEDULED_MESSAGES_SETUP.md 
+SLACKCONNECT_COMPLETE_DOCUMENTATION.md
+TOKEN_REFRESH_AUDIT.md
 # typescript
 *.tsbuildinfo
 next-env.d.ts
