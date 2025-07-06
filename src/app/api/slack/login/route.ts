@@ -11,6 +11,7 @@ export async function GET() {
     'im:read',
     'chat:write',
     'users:read',
+    'users:read.email',
   ].join(',');
 
   const userScopes = [
@@ -20,6 +21,7 @@ export async function GET() {
     'im:read',
     'mpim:read',
     'users:read',
+    'users:read.email',
   ].join(',');
 
   const slackAuthUrl = `https://slack.com/oauth/v2/authorize?client_id=${clientId}&scope=${encodeURIComponent(scopes)}&user_scope=${encodeURIComponent(userScopes)}&redirect_uri=${encodeURIComponent(redirectUri)}`;

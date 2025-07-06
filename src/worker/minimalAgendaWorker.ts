@@ -44,28 +44,110 @@ const agenda = new Agenda({
 });
 
 let agendaReady = false;
+let lastQueueCheck = new Date();
 
 agenda.on('ready', () => {
   console.log('[Worker] Agenda ready!');
   agendaReady = true;
 });
+
 agenda.on('error', (err) => {
   console.error('[Worker] Agenda error:', err);
 });
 
+agenda.on('start', (job) => {
+  console.log(`[Worker] Job started: ${job.attrs.name} (ID: ${job.attrs._id})`);
+});
+
+agenda.on('complete', (job) => {
+  console.log(`[Worker] Job completed: ${job.attrs.name} (ID: ${job.attrs._id})`);
+});
+
+agenda.on('fail', (job, err) => {
+  console.error(`[Worker] Job failed: ${job.attrs.name} (ID: ${job.attrs._id})`, err);
+});
+
+// Queue monitoring function
+async function logQueueStatus() {
+  try {
+    const now = new Date();
+    const timeSinceLastCheck = now.getTime() - lastQueueCheck.getTime();
+    
+    if (timeSinceLastCheck >= 30000) { // Log every 30 seconds
+      const jobs = await agenda.jobs({});
+      const queuedJobs = jobs.filter(job => (job.attrs.failCount || 0) === 0);
+      const failedJobs = jobs.filter(job => (job.attrs.failCount || 0) > 0);
+      const runningJobs = jobs.filter(job => job.attrs.lastRunAt && !job.attrs.failedAt);
+      
+      console.log(`[Worker] Queue Status (${now.toISOString()}):`);
+      console.log(`  - Total jobs: ${jobs.length}`);
+      console.log(`  - Queued jobs: ${queuedJobs.length}`);
+      console.log(`  - Failed jobs: ${failedJobs.length}`);
+      console.log(`  - Running jobs: ${runningJobs.length}`);
+      console.log(`  - Time since last check: ${Math.round(timeSinceLastCheck / 1000)}s`);
+      
+      if (queuedJobs.length > 0) {
+        console.log(`  - Next job scheduled for: ${queuedJobs[0].attrs.nextRunAt?.toISOString()}`);
+      }
+      
+      lastQueueCheck = now;
+    }
+  } catch (error) {
+    console.error('[Worker] Error checking queue status:', error);
+  }
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function processScheduledMessageJob(job: any, agenda: Agenda) {
   const { deliveryId } = job.attrs.data as { deliveryId: string };
-  if (!deliveryId) return;
+  const startTime = new Date();
+  
+  console.log(`[Worker] Processing scheduled message job for delivery ${deliveryId} at ${startTime.toISOString()}`);
+  
+  if (!deliveryId) {
+    console.error('[Worker] No deliveryId provided in job data');
+    return;
+  }
 
   const db = agenda._mdb;
   const delivery = await db.collection('messagedeliveries').findOne({ _id: new ObjectId(deliveryId) }) as MessageDelivery | null;
-  if (!delivery || delivery.status !== 'queued') return;
+  
+  if (!delivery) {
+    console.error(`[Worker] Delivery not found for ID: ${deliveryId}`);
+    return;
+  }
+  
+  if (delivery.status !== 'queued') {
+    console.log(`[Worker] Delivery ${deliveryId} is not queued (status: ${delivery.status}), skipping`);
+    return;
+  }
+  
+  console.log(`[Worker] Found delivery ${deliveryId}:`, {
+    slackUserId: delivery.slackUserId,
+    slackChannelId: delivery.slackChannelId,
+    type: delivery.type,
+    scheduledTime: delivery.scheduledTime,
+    attempts: delivery.attempts?.length || 0
+  });
 
   const user = await db.collection('users').findOne({ _id: delivery.userId }) as User | null;
   const message = await db.collection('messages').findOne({ _id: delivery.messageId }) as Message | null;
 
+  console.log(`[Worker] Lookup results for delivery ${deliveryId}:`, {
+    userFound: !!user,
+    userSlackId: user?.slackUserId,
+    hasAccessToken: !!user?.slackUserAccessToken,
+    messageFound: !!message,
+    messageLength: message?.text?.length || 0
+  });
+
   if (!user || !user.slackUserId || !user.slackUserAccessToken) {
+    const errorMsg = !user ? 'User not found' : 
+                    !user.slackUserId ? 'User slackUserId not found' : 
+                    'User access token not found';
+    
+    console.error(`[Worker] Failed to process delivery ${deliveryId}: ${errorMsg}`);
+    
     await db.collection('messagedeliveries').updateOne(
       { _id: delivery._id },
       {
@@ -74,7 +156,7 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
           attempts: { $each: [ {
             timestamp: new Date(),
             status: 'failure',
-            error: 'User or slackUserId or access token not found',
+            error: errorMsg,
           } ] }
         },
       }
@@ -83,6 +165,12 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
   }
 
   try {
+    console.log(`[Worker] Sending message to Slack for delivery ${deliveryId}:`, {
+      channel: delivery.slackChannelId,
+      messageLength: message!.text.length,
+      userSlackId: user.slackUserId
+    });
+    
     const slackResponse = await fetch('https://slack.com/api/chat.postMessage', {
       method: 'POST',
       headers: {
@@ -97,6 +185,14 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
 
     const responseData = await slackResponse.json();
     const failCount = (delivery.attempts?.length || 0) + 1;
+    const processingTime = new Date().getTime() - startTime.getTime();
+    
+    console.log(`[Worker] Slack API response for delivery ${deliveryId} (${processingTime}ms):`, {
+      ok: responseData.ok,
+      error: responseData.error,
+      ts: responseData.ts,
+      channel: responseData.channel
+    });
 
     if (responseData.ok) {
       await db.collection('messagedeliveries').updateOne(
@@ -112,12 +208,18 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
           },
         }
       );
-      console.log('[Worker] Message sent successfully for delivery', deliveryId);
+      console.log(`[Worker] ✅ Message sent successfully for delivery ${deliveryId} in ${processingTime}ms`);
     } else {
+      console.log(`[Worker] ❌ Slack API error for delivery ${deliveryId}: ${responseData.error}`);
+      
       if (failCount < 3) {
-        await agenda.schedule(new Date(Date.now() + 60 * 1000), 'send-scheduled-message', { deliveryId });
-        console.log(`[Worker] Retry scheduled for delivery ${deliveryId} (attempt ${failCount})`);
+        const retryTime = new Date(Date.now() + 60 * 1000);
+        await agenda.schedule(retryTime, 'send-scheduled-message', { deliveryId });
+        console.log(`[Worker] 🔄 Retry scheduled for delivery ${deliveryId} (attempt ${failCount}/3) at ${retryTime.toISOString()}`);
+      } else {
+        console.log(`[Worker] 🚫 Max retries reached for delivery ${deliveryId}, marking as failed`);
       }
+      
       await db.collection('messagedeliveries').updateOne(
         { _id: delivery._id },
         {
@@ -132,14 +234,21 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
           },
         }
       );
-      console.log('[Worker] Message failed for delivery', deliveryId, 'Error:', responseData.error);
     }
   } catch (error) {
     const failCount = (delivery.attempts?.length || 0) + 1;
+    const processingTime = new Date().getTime() - startTime.getTime();
+    
+    console.error(`[Worker] 💥 Exception processing delivery ${deliveryId} after ${processingTime}ms:`, error);
+    
     if (failCount < 3) {
-      await agenda.schedule(new Date(Date.now() + 60 * 1000), 'send-scheduled-message', { deliveryId });
-      console.log(`[Worker] Retry scheduled for delivery ${deliveryId} (attempt ${failCount})`);
+      const retryTime = new Date(Date.now() + 60 * 1000);
+      await agenda.schedule(retryTime, 'send-scheduled-message', { deliveryId });
+      console.log(`[Worker] 🔄 Retry scheduled for delivery ${deliveryId} (attempt ${failCount}/3) at ${retryTime.toISOString()}`);
+    } else {
+      console.log(`[Worker] 🚫 Max retries reached for delivery ${deliveryId}, marking as failed`);
     }
+    
     await db.collection('messagedeliveries').updateOne(
       { _id: delivery._id },
       {
@@ -153,7 +262,6 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
         },
       }
     );
-    console.error('[Worker] Error processing delivery', deliveryId, error);
   }
 }
 
@@ -188,6 +296,14 @@ const PORT = parseInt(process.env.PORT || '3001', 10);
       console.log(`[Worker] HTTP server listening on port ${PORT}`);
       console.log(`[Worker] Health check available at http://0.0.0.0:${PORT}`);
     });
+    
+    // Start periodic queue status logging
+    setInterval(async () => {
+      await logQueueStatus();
+    }, 10000); // Check every 10 seconds
+    
+    console.log('[Worker] Queue monitoring started (every 10 seconds)');
+    
   } catch (err) {
     console.error('[Worker] Agenda failed to start:', err);
     process.exit(1);

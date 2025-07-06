@@ -55,7 +55,19 @@ export async function GET(req: NextRequest) {
       });
       const userInfo = await userInfoResponse.json();
       console.log('[Slack OAuth Callback] Slack user info response:', userInfo);
-      email = userInfo.user?.profile?.email || userInfo.user?.name;
+      
+      // Try multiple locations for email
+      email = userInfo.user?.profile?.email || 
+              userInfo.user?.profile?.email_address ||
+              userInfo.user?.email ||
+              userInfo.user?.name; // fallback to username
+              
+      console.log('[Slack OAuth Callback] Extracted email:', email);
+      
+      if (!userInfo.user?.profile?.email) {
+        console.warn('[Slack OAuth Callback] No email found in user profile. Available fields:', 
+          Object.keys(userInfo.user?.profile || {}));
+      }
     } catch (e) {
       console.error('[Slack OAuth Callback] Failed to fetch user email:', e);
     }
