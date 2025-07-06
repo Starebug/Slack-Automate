@@ -46,6 +46,43 @@ A modern, secure Slack workspace integration application built with Next.js for 
 6. **Open your browser**
    Navigate to [http://localhost:3000](http://localhost:3000)
 
+### Running with ngrok (for external access)
+
+If you need to test the app from external devices or share it with others, you can use ngrok:
+
+1. **Install ngrok** (if not already installed)
+   ```bash
+   npm install -g ngrok
+   # or download from https://ngrok.com/
+   ```
+
+2. **Start your Next.js app**
+   ```bash
+   pnpm dev
+   ```
+
+3. **Start ngrok tunnel**
+   ```bash
+   ngrok http 3000
+   ```
+
+4. **Update your environment variables**
+   ```env
+   NEXT_PUBLIC_BASE_URL=https://your-ngrok-url.ngrok.io
+   AUTH_REDIRECT_URI=https://your-ngrok-url.ngrok.io/api/slack/callback
+   ```
+
+5. **Update your Slack app settings**
+   - Go to your Slack app settings at [https://api.slack.com/apps](https://api.slack.com/apps)
+   - Navigate to **OAuth & Permissions**
+   - Add the ngrok URL to **Redirect URLs**: `https://your-ngrok-url.ngrok.io/api/slack/callback`
+   - Save the changes
+
+6. **Access your app**
+   Navigate to your ngrok URL: `https://your-ngrok-url.ngrok.io`
+
+**Note**: ngrok URLs change each time you restart ngrok (unless you have a paid account). You'll need to update both your environment variables and Slack app settings with the new URL.
+
 ## Tech Stack
 
 - **Framework**: Next.js 15 with App Router
@@ -117,7 +154,7 @@ MONGODB_URI=your_mongodb_connection_string
 # Slack OAuth Configuration
 AUTH_SLACK_ID=your_slack_client_id
 AUTH_SLACK_SECRET=your_slack_client_secret
-AUTH_REDIRECT_URI=your_redirect_uri
+AUTH_REDIRECT_URI=your_base_url/api/slack/callback
 
 # JWT Configuration
 JWT_SECRET=your_jwt_secret_key
@@ -126,6 +163,10 @@ JWT_SECRET=your_jwt_secret_key
 NEXT_PUBLIC_BASE_URL=your_base_url
 NODE_ENV=development
 ```
+
+**Important**: The `AUTH_REDIRECT_URI` must be in the format `{NEXT_PUBLIC_BASE_URL}/api/slack/callback`. For example:
+- Development: `http://localhost:3000/api/slack/callback`
+- Production: `https://yourdomain.com/api/slack/callback`
 
 ## Features in Detail
 
