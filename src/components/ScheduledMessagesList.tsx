@@ -129,16 +129,16 @@ export default function ScheduledMessagesList({ refreshTrigger }: ScheduledMessa
 
   const formatDateTime = (dateString: string) => {
     const date = new Date(dateString);
-    return date.toLocaleString('en-US', { 
-      timeZone: 'UTC',
+    return date.toLocaleString('en-IN', { 
+      timeZone: 'Asia/Kolkata',
       year: 'numeric',
       month: 'numeric',
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
-      hour12: false
-    }) + ' UTC';
+      hour12: true
+    }) + ' IST';
   };
 
   const truncateText = (text: string, maxLength: number = 100) => {
