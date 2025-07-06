@@ -116,6 +116,114 @@ If you need to test the app from external devices or share it with others, you c
 - **Language**: TypeScript
 - **Package Manager**: pnpm
 
+## Architectural Overview
+
+### OAuth Flow & Token Management
+The application implements a secure OAuth 2.0 flow with Slack:
+
+1. **OAuth Initiation**: Users click "Connect with Slack" → redirects to Slack's authorization page
+2. **Scope Request**: Requests `users:read.email`, `channels:read`, `chat:write`, and other necessary permissions
+3. **Token Exchange**: Receives both user and bot tokens from Slack's OAuth callback
+4. **Token Storage**: Securely stores tokens in MongoDB with automatic refresh handling
+5. **Session Management**: Uses JWT tokens for stateless session management with secure HttpOnly cookies
+
+### Scheduled Task Handling
+The system uses a robust background job processing architecture:
+
+1. **Job Creation**: When users schedule messages, jobs are created in MongoDB's `agendaJobs` collection
+2. **Worker Process**: Dedicated worker service processes jobs using Agenda.js with automatic retry logic
+3. **Timezone Handling**: Proper UTC/IST conversion ensures accurate delivery timing
+4. **Cleanup Strategy**: Successful jobs are cleaned up immediately, failed jobs after max retries
+5. **Monitoring**: Real-time queue status monitoring with detailed logging
+
+### Database Design
+- **Users**: Store Slack user info, tokens, and team details
+- **Messages**: Store message content and metadata
+- **MessageDeliveries**: Track delivery status, attempts, and scheduling info
+- **AgendaJobs**: Background job queue for scheduled processing
+
+## Challenges & Learnings
+
+### 1. Timezone Management & UTC/Local Time Confusion
+**Challenge**: As a newcomer to timezone handling, initially struggled with the complexity of UTC vs local time (IST) conversion. The datetime-local input was being interpreted incorrectly, causing messages to be scheduled for wrong times.
+
+**Initial Problems**:
+- Datetime-local input was being treated as UTC instead of local time
+- Messages were being scheduled 5:30 hours ahead of intended time
+- Frontend was displaying UTC times as if they were IST
+- Worker logs showed confusing timestamps
+
+**Solution**: Implemented proper timezone conversion:
+- Frontend datetime-local input interpreted as IST
+- Backend converts IST to UTC for storage: `new Date(istTime - 5.5 hours)`
+- Worker processes in UTC, ensuring accurate delivery
+- Frontend displays in IST for user-friendly experience
+
+**Learning**: Always store times in UTC, convert for display, and be explicit about timezone handling. The datetime-local input provides local time, not UTC time.
+
+### 2. Initial Setup & Connection Challenges
+**Challenge**: As a newcomer to Slack API and OAuth integration, faced significant hurdles in understanding the authentication flow and setting up the initial connection.
+
+**Initial Problems**:
+- Unfamiliar with Slack OAuth 2.0 flow and required scopes
+- Confused about the difference between user tokens and bot tokens
+- Struggled with redirect URI configuration and ngrok setup
+- Didn't understand the importance of `users:read.email` scope for accessing email addresses
+- Made mistakes in environment variable configuration
+
+**Solution**: 
+- Studied Slack API documentation thoroughly
+- Implemented step-by-step OAuth flow with proper error handling
+- Added comprehensive logging to debug authentication issues
+- Created detailed setup guide for future reference
+- Used ngrok for local development and testing
+
+**Learning**: OAuth integration requires understanding of scopes, tokens, and proper error handling. Always read documentation carefully and test each step.
+
+### 3. Background Job Processing
+**Challenge**: Implementing reliable scheduled message delivery that survives server restarts and handles failures gracefully.
+
+**Solution**: 
+- Used Agenda.js with MongoDB persistence for job durability
+- Implemented comprehensive retry logic (3 attempts with exponential backoff)
+- Added automatic cleanup for both successful and failed jobs
+- Created separate worker service for production deployment
+
+**Learning**: Background job systems need persistence, monitoring, and cleanup strategies.
+
+### 4. Token Refresh & Security
+**Challenge**: Managing Slack token expiration and ensuring secure token storage.
+
+**Solution**:
+- Implemented automatic token refresh using refresh tokens
+- Stored tokens securely in MongoDB with encryption
+- Added token validation before API calls
+- Graceful handling of expired tokens with user re-authentication prompts
+
+**Learning**: OAuth token management requires proactive refresh and graceful degradation.
+
+### 5. Production Deployment Architecture
+**Challenge**: Deploying a system with both web app and background worker requirements.
+
+**Solution**:
+- Separated web app (Next.js) and worker (Agenda.js) into different services
+- Used platform-specific deployment strategies (Vercel for web, Railway/Render for worker)
+- Implemented health checks and graceful shutdown handling
+- Added comprehensive logging for debugging production issues
+
+**Learning**: Microservices architecture provides better scalability and deployment flexibility.
+
+### 6. Error Handling & User Experience
+**Challenge**: Providing clear feedback for various failure scenarios (network issues, permission errors, etc.).
+
+**Solution**:
+- Implemented specific error messages for different Slack API errors
+- Added retry mechanisms with user-friendly messaging
+- Created comprehensive logging for debugging
+- Built responsive UI with loading states and error recovery
+
+**Learning**: Good error handling improves user experience and reduces support burden.
+
 ## Project Structure
 
 ```

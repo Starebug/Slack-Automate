@@ -108,150 +108,172 @@ async function logQueueStatus() {
 async function processScheduledMessageJob(job: any, agenda: Agenda) {
   const { deliveryId } = job.attrs.data as { deliveryId: string };
   const startTime = new Date();
-  
-  console.log(`[Worker] Processing scheduled message job for delivery ${deliveryId} at ${startTime.toISOString()}`);
-  
-  if (!deliveryId) {
-    console.error('[Worker] No deliveryId provided in job data');
-    return;
-  }
-
-  const db = agenda._mdb;
-  const delivery = await db.collection('messagedeliveries').findOne({ _id: new ObjectId(deliveryId) }) as MessageDelivery | null;
-  
-  if (!delivery) {
-    console.error(`[Worker] Delivery not found for ID: ${deliveryId}`);
-    
-    // Clean up the orphaned job from agendaJobs collection
-    try {
-      await db.collection('agendaJobs').deleteOne({ 
-        name: 'send-scheduled-message',
-        'data.deliveryId': deliveryId 
-      });
-      console.log(`[Worker] 🗑️ Deleted orphaned job from agendaJobs for delivery ${deliveryId}`);
-    } catch (deleteError) {
-      console.error(`[Worker] Failed to delete orphaned job from agendaJobs for delivery ${deliveryId}:`, deleteError);
-    }
-    return;
-  }
-  
-  if (delivery.status !== 'queued') {
-    console.log(`[Worker] Delivery ${deliveryId} is not queued (status: ${delivery.status}), skipping`);
-    
-    // Clean up the job from agendaJobs collection since it's not in queued status
-    try {
-      await db.collection('agendaJobs').deleteOne({ 
-        name: 'send-scheduled-message',
-        'data.deliveryId': deliveryId 
-      });
-      console.log(`[Worker] 🗑️ Deleted non-queued job from agendaJobs for delivery ${deliveryId}`);
-    } catch (deleteError) {
-      console.error(`[Worker] Failed to delete non-queued job from agendaJobs for delivery ${deliveryId}:`, deleteError);
-    }
-    return;
-  }
-  
-  console.log(`[Worker] Found delivery ${deliveryId}:`, {
-    slackUserId: delivery.slackUserId,
-    slackChannelId: delivery.slackChannelId,
-    type: delivery.type,
-    scheduledTime: delivery.scheduledTime,
-    attempts: delivery.attempts?.length || 0
-  });
-
-  const user = await db.collection('users').findOne({ _id: delivery.userId }) as User | null;
-  const message = await db.collection('messages').findOne({ _id: delivery.messageId }) as Message | null;
-
-  console.log(`[Worker] Lookup results for delivery ${deliveryId}:`, {
-    userFound: !!user,
-    userSlackId: user?.slackUserId,
-    hasAccessToken: !!user?.slackUserAccessToken,
-    messageFound: !!message,
-    messageLength: message?.text?.length || 0
-  });
-
-  if (!user || !user.slackUserId || !user.slackUserAccessToken) {
-    const errorMsg = !user ? 'User not found' : 
-                    !user.slackUserId ? 'User slackUserId not found' : 
-                    'User access token not found';
-    
-    console.error(`[Worker] Failed to process delivery ${deliveryId}: ${errorMsg}`);
-    
-    await db.collection('messagedeliveries').updateOne(
-      { _id: delivery._id },
-      {
-        $set: { status: 'failed' },
-        $push: {
-          attempts: { $each: [ {
-            timestamp: new Date(),
-            status: 'failure',
-            error: errorMsg,
-          } ] }
-        },
-      }
-    );
-    return;
-  }
-
+  let delivery: MessageDelivery | null = null;
+  let user: User | null = null;
+  let message: Message | null = null;
+  let failCount = 0;
   try {
-    console.log(`[Worker] Sending message to Slack for delivery ${deliveryId}:`, {
-      channel: delivery.slackChannelId,
-      messageLength: message!.text.length,
-      userSlackId: user.slackUserId
-    });
+    console.log(`[Worker] Processing scheduled message job for delivery ${deliveryId} at ${startTime.toISOString()}`);
     
-    const slackResponse = await fetch('https://slack.com/api/chat.postMessage', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${user.slackUserAccessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        channel: delivery.slackChannelId,
-        text: message!.text,
-      }),
-    });
+    if (!deliveryId) {
+      console.error('[Worker] No deliveryId provided in job data');
+      return;
+    }
 
-    const responseData = await slackResponse.json();
-    const failCount = (delivery.attempts?.length || 0) + 1;
-    const processingTime = new Date().getTime() - startTime.getTime();
+    const db = agenda._mdb;
+    delivery = await db.collection('messagedeliveries').findOne({ _id: new ObjectId(deliveryId) }) as MessageDelivery | null;
     
-    console.log(`[Worker] Slack API response for delivery ${deliveryId} (${processingTime}ms):`, {
-      ok: responseData.ok,
-      error: responseData.error,
-      ts: responseData.ts,
-      channel: responseData.channel
-    });
-
-    if (responseData.ok) {
-      await db.collection('messagedeliveries').updateOne(
-        { _id: delivery._id },
-        {
-          $set: { status: 'sent' },
-          $push: {
-            attempts: { $each: [ {
-              timestamp: new Date(),
-              status: 'success',
-              response: responseData,
-            } ] }
-          },
-        }
-      );
+    if (!delivery) {
+      console.error(`[Worker] Delivery not found for ID: ${deliveryId}`);
       
-      // Delete the successful job from agendaJobs collection
+      // Clean up the orphaned job from agendaJobs collection
       try {
         await db.collection('agendaJobs').deleteOne({ 
           name: 'send-scheduled-message',
           'data.deliveryId': deliveryId 
         });
-        console.log(`[Worker] 🗑️ Deleted successful job from agendaJobs for delivery ${deliveryId}`);
+        console.log(`[Worker] 🗑️ Deleted orphaned job from agendaJobs for delivery ${deliveryId}`);
       } catch (deleteError) {
-        console.error(`[Worker] Failed to delete successful job from agendaJobs for delivery ${deliveryId}:`, deleteError);
+        console.error(`[Worker] Failed to delete orphaned job from agendaJobs for delivery ${deliveryId}:`, deleteError);
       }
+      return;
+    }
+    
+    if (delivery.status !== 'queued') {
+      console.log(`[Worker] Delivery ${deliveryId} is not queued (status: ${delivery.status}), skipping`);
       
-      console.log(`[Worker] ✅ Message sent successfully for delivery ${deliveryId} in ${processingTime}ms`);
-    } else {
-      console.log(`[Worker] ❌ Slack API error for delivery ${deliveryId}: ${responseData.error}`);
+      // Clean up the job from agendaJobs collection since it's not in queued status
+      try {
+        await db.collection('agendaJobs').deleteOne({ 
+          name: 'send-scheduled-message',
+          'data.deliveryId': deliveryId 
+        });
+        console.log(`[Worker] 🗑️ Deleted non-queued job from agendaJobs for delivery ${deliveryId}`);
+      } catch (deleteError) {
+        console.error(`[Worker] Failed to delete non-queued job from agendaJobs for delivery ${deliveryId}:`, deleteError);
+      }
+      return;
+    }
+    
+    console.log(`[Worker] Found delivery ${deliveryId}:`, {
+      slackUserId: delivery.slackUserId,
+      slackChannelId: delivery.slackChannelId,
+      type: delivery.type,
+      scheduledTime: delivery.scheduledTime,
+      attempts: delivery.attempts?.length || 0
+    });
+
+    user = await db.collection('users').findOne({ _id: delivery.userId }) as User | null;
+    message = await db.collection('messages').findOne({ _id: delivery.messageId }) as Message | null;
+
+    console.log(`[Worker] Lookup results for delivery ${deliveryId}:`, {
+      userFound: !!user,
+      userSlackId: user?.slackUserId,
+      hasAccessToken: !!user?.slackUserAccessToken,
+      messageFound: !!message,
+      messageLength: message?.text?.length || 0
+    });
+
+    if (!user || !user.slackUserId || !user.slackUserAccessToken) {
+      const errorMsg = !user ? 'User not found' : 
+                      !user.slackUserId ? 'User slackUserId not found' : 
+                      'User access token not found';
+      
+      console.error(`[Worker] Failed to process delivery ${deliveryId}: ${errorMsg}`);
+      
+      await db.collection('messagedeliveries').updateOne(
+        { _id: delivery._id },
+        {
+          $set: { status: 'failed' },
+          $push: {
+            attempts: { $each: [ {
+              timestamp: new Date(),
+              status: 'failure',
+              error: errorMsg,
+            } ] }
+          },
+        }
+      );
+      return;
+    }
+
+    try {
+      console.log(`[Worker] Sending message to Slack for delivery ${deliveryId}:`, {
+        channel: delivery.slackChannelId,
+        messageLength: message!.text.length,
+        userSlackId: user.slackUserId
+      });
+      
+      const slackResponse = await fetch('https://slack.com/api/chat.postMessage', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${user.slackUserAccessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          channel: delivery.slackChannelId,
+          text: message!.text,
+        }),
+      });
+
+      const responseData = await slackResponse.json();
+      failCount = (delivery.attempts?.length || 0) + 1;
+      const processingTime = new Date().getTime() - startTime.getTime();
+      
+      console.log(`[Worker] Slack API response for delivery ${deliveryId} (${processingTime}ms):`, {
+        ok: responseData.ok,
+        error: responseData.error,
+        ts: responseData.ts,
+        channel: responseData.channel
+      });
+
+      if (responseData.ok) {
+        await db.collection('messagedeliveries').updateOne(
+          { _id: delivery._id },
+          {
+            $set: { status: 'sent' },
+            $push: {
+              attempts: { $each: [ {
+                timestamp: new Date(),
+                status: 'success',
+                response: responseData,
+              } ] }
+            },
+          }
+        );
+        
+        console.log(`[Worker] ✅ Message sent successfully for delivery ${deliveryId} in ${processingTime}ms`);
+      } else {
+        console.log(`[Worker] ❌ Slack API error for delivery ${deliveryId}: ${responseData.error}`);
+        
+        if (failCount < 3) {
+          const retryTime = new Date(Date.now() + 60 * 1000);
+          await agenda.schedule(retryTime, 'send-scheduled-message', { deliveryId });
+          console.log(`[Worker] 🔄 Retry scheduled for delivery ${deliveryId} (attempt ${failCount}/3) at ${retryTime.toISOString()}`);
+        } else {
+          console.log(`[Worker] 🚫 Max retries reached for delivery ${deliveryId}, deleting failed delivery`);
+          
+          // Delete the failed delivery from messagedeliveries collection
+          try {
+            await db.collection('messagedeliveries').deleteOne({ _id: delivery._id });
+            console.log(`[Worker] 🗑️ Deleted failed delivery from messagedeliveries for delivery ${deliveryId}`);
+          } catch (deleteError) {
+            console.error(`[Worker] Failed to delete delivery from messagedeliveries for delivery ${deliveryId}:`, deleteError);
+          }
+          
+          // Also delete the associated message from messages collection
+          try {
+            await db.collection('messages').deleteOne({ _id: delivery.messageId });
+            console.log(`[Worker] 🗑️ Deleted associated message from messages for delivery ${deliveryId}`);
+          } catch (deleteError) {
+            console.error(`[Worker] Failed to delete message from messages for delivery ${deliveryId}:`, deleteError);
+          }
+        }
+      }
+    } catch (error) {
+      const processingTime = new Date().getTime() - startTime.getTime();
+      
+      console.error(`[Worker] 💥 Exception processing delivery ${deliveryId} after ${processingTime}ms:`, error);
       
       if (failCount < 3) {
         const retryTime = new Date(Date.now() + 60 * 1000);
@@ -259,17 +281,6 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
         console.log(`[Worker] 🔄 Retry scheduled for delivery ${deliveryId} (attempt ${failCount}/3) at ${retryTime.toISOString()}`);
       } else {
         console.log(`[Worker] 🚫 Max retries reached for delivery ${deliveryId}, deleting failed delivery`);
-        
-        // Delete the job from agendaJobs collection when max retries reached
-        try {
-          await db.collection('agendaJobs').deleteOne({ 
-            name: 'send-scheduled-message',
-            'data.deliveryId': deliveryId 
-          });
-          console.log(`[Worker] 🗑️ Deleted failed job from agendaJobs for delivery ${deliveryId}`);
-        } catch (deleteError) {
-          console.error(`[Worker] Failed to delete job from agendaJobs for delivery ${deliveryId}:`, deleteError);
-        }
         
         // Delete the failed delivery from messagedeliveries collection
         try {
@@ -289,44 +300,31 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
       }
     }
   } catch (error) {
-    const failCount = (delivery.attempts?.length || 0) + 1;
-    const processingTime = new Date().getTime() - startTime.getTime();
-    
-    console.error(`[Worker] 💥 Exception processing delivery ${deliveryId} after ${processingTime}ms:`, error);
-    
-    if (failCount < 3) {
-      const retryTime = new Date(Date.now() + 60 * 1000);
-      await agenda.schedule(retryTime, 'send-scheduled-message', { deliveryId });
-      console.log(`[Worker] 🔄 Retry scheduled for delivery ${deliveryId} (attempt ${failCount}/3) at ${retryTime.toISOString()}`);
-    } else {
-      console.log(`[Worker] 🚫 Max retries reached for delivery ${deliveryId}, deleting failed delivery`);
-      
-      // Delete the job from agendaJobs collection when max retries reached
-      try {
-        await db.collection('agendaJobs').deleteOne({ 
-          name: 'send-scheduled-message',
-          'data.deliveryId': deliveryId 
-        });
-        console.log(`[Worker] 🗑️ Deleted failed job from agendaJobs for delivery ${deliveryId}`);
-      } catch (deleteError) {
-        console.error(`[Worker] Failed to delete job from agendaJobs for delivery ${deliveryId}:`, deleteError);
+    console.error(`[Worker] 💥 Exception processing job:`, error);
+  } finally {
+    // Always remove the job from Agenda.js and agendaJobs collection
+    try {
+      console.log(`[Worker] 🔍 [FINALLY] Attempting to remove job from Agenda.js queue for delivery ${deliveryId}`);
+      if (typeof job.remove === 'function') {
+        await job.remove();
+        console.log(`[Worker] 🗑️ [FINALLY] Removed job from Agenda.js queue for delivery ${deliveryId}`);
+      } else if (typeof job.delete === 'function') {
+        await job.delete();
+        console.log(`[Worker] 🗑️ [FINALLY] Deleted job from Agenda.js queue for delivery ${deliveryId}`);
+      } else {
+        console.log(`[Worker] ⚠️ [FINALLY] No remove/delete method found on job object`);
       }
-      
-      // Delete the failed delivery from messagedeliveries collection
-      try {
-        await db.collection('messagedeliveries').deleteOne({ _id: delivery._id });
-        console.log(`[Worker] 🗑️ Deleted failed delivery from messagedeliveries for delivery ${deliveryId}`);
-      } catch (deleteError) {
-        console.error(`[Worker] Failed to delete delivery from messagedeliveries for delivery ${deliveryId}:`, deleteError);
-      }
-      
-      // Also delete the associated message from messages collection
-      try {
-        await db.collection('messages').deleteOne({ _id: delivery.messageId });
-        console.log(`[Worker] 🗑️ Deleted associated message from messages for delivery ${deliveryId}`);
-      } catch (deleteError) {
-        console.error(`[Worker] Failed to delete message from messages for delivery ${deliveryId}:`, deleteError);
-      }
+    } catch (removeError) {
+      console.error(`[Worker] [FINALLY] Failed to remove job from Agenda.js queue for delivery ${deliveryId}:`, removeError);
+    }
+    try {
+      const deleteResult = await agenda._mdb.collection('agendaJobs').deleteOne({
+        name: 'send-scheduled-message',
+        'data.deliveryId': deliveryId
+      });
+      console.log(`[Worker] 🗑️ [FINALLY] Deleted job from agendaJobs collection for delivery ${deliveryId}. Result:`, deleteResult);
+    } catch (deleteError) {
+      console.error(`[Worker] [FINALLY] Failed to delete job from agendaJobs collection for delivery ${deliveryId}:`, deleteError);
     }
   }
 }
