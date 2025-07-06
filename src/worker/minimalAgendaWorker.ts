@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { ObjectId } from 'mongodb';
 import http from 'http';
+import { getValidAccessTokenBySlackUserId } from '../lib/slackTokenManager';
 
 dotenv.config({ path: path.join(__dirname, '../../.env.local') });
 
@@ -163,11 +164,32 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
       messageLength: message?.text?.length || 0
     });
 
-    if (!user || !user.slackUserId || !user.slackUserAccessToken) {
-      const errorMsg = !user ? 'User not found' : 
-                      !user.slackUserId ? 'User slackUserId not found' : 
-                      'User access token not found';
+    if (!user || !user.slackUserId) {
+      const errorMsg = !user ? 'User not found' : 'User slackUserId not found';
       
+      console.error(`[Worker] Failed to process delivery ${deliveryId}: ${errorMsg}`);
+      
+      await db.collection('messagedeliveries').updateOne(
+        { _id: delivery._id },
+        {
+          $set: { status: 'failed' },
+          $push: {
+            attempts: { $each: [ {
+              timestamp: new Date(),
+              status: 'failure',
+              error: errorMsg,
+            } ] }
+          },
+        }
+      );
+      return;
+    }
+
+    console.log(`[Worker] Getting valid access token for user ${user.slackUserId}`);
+    const accessToken = await getValidAccessTokenBySlackUserId(user.slackUserId);
+    
+    if (!accessToken) {
+      const errorMsg = 'Unable to get valid access token. Token may be expired and refresh failed.';
       console.error(`[Worker] Failed to process delivery ${deliveryId}: ${errorMsg}`);
       
       await db.collection('messagedeliveries').updateOne(
@@ -190,13 +212,14 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
       console.log(`[Worker] Sending message to Slack for delivery ${deliveryId}:`, {
         channel: delivery.slackChannelId,
         messageLength: message!.text.length,
-        userSlackId: user.slackUserId
+        userSlackId: user.slackUserId,
+        hasValidToken: !!accessToken
       });
       
       const slackResponse = await fetch('https://slack.com/api/chat.postMessage', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${user.slackUserAccessToken}`,
+          'Authorization': `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -235,12 +258,20 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
       } else {
         console.log(`[Worker] ❌ Slack API error for delivery ${deliveryId}: ${responseData.error}`);
         
-        if (failCount < 3) {
+        let shouldRetry = true; 
+        if (responseData.error === 'token_expired' || responseData.error === 'token_revoked') {
+          console.log(`[Worker] 🔄 Token expired/revoked for delivery ${deliveryId}, will retry with token refresh`);
+         } else if (responseData.error === 'missing_scope' || responseData.error === 'not_authed') {
+          console.log(`[Worker] 🚫 Permanent error for delivery ${deliveryId}: ${responseData.error}`);
+          shouldRetry = false;
+         }
+        
+        if (shouldRetry && failCount < 3) {
           const retryTime = new Date(Date.now() + 60 * 1000);
           await agenda.schedule(retryTime, 'send-scheduled-message', { deliveryId });
           console.log(`[Worker] 🔄 Retry scheduled for delivery ${deliveryId} (attempt ${failCount}/3) at ${retryTime.toISOString()}`);
         } else {
-          console.log(`[Worker] 🚫 Max retries reached for delivery ${deliveryId}, deleting failed delivery`);
+          console.log(`[Worker] 🚫 Max retries reached or permanent error for delivery ${deliveryId}, deleting failed delivery`);
           
           try {
             await db.collection('messagedeliveries').deleteOne({ _id: delivery._id });
