@@ -102,6 +102,7 @@ async function logQueueStatus() {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function processScheduledMessageJob(job: any, agenda: Agenda) {
   const { deliveryId } = job.attrs.data as { deliveryId: string };
   const startTime = new Date();
@@ -310,6 +311,7 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 agenda.define('send-scheduled-message', { concurrency: 2 }, async (job: any) => {
   await processScheduledMessageJob(job, agenda);
 });
