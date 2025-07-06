@@ -67,13 +67,12 @@ agenda.on('fail', (job, err) => {
   console.error(`[Worker] Job failed: ${job.attrs.name} (ID: ${job.attrs._id})`, err);
 });
 
-// Queue monitoring function
 async function logQueueStatus() {
   try {
     const now = new Date();
     const timeSinceLastCheck = now.getTime() - lastQueueCheck.getTime();
     
-    if (timeSinceLastCheck >= 30000) { // Log every 30 seconds
+    if (timeSinceLastCheck >= 30000) {
       const jobs = await agenda.jobs({});
       const queuedJobs = jobs.filter(job => (job.attrs.failCount || 0) === 0);
       const failedJobs = jobs.filter(job => (job.attrs.failCount || 0) > 0);
@@ -89,7 +88,6 @@ async function logQueueStatus() {
       if (queuedJobs.length > 0) {
         console.log(`  - Next job scheduled for: ${queuedJobs[0].attrs.nextRunAt?.toISOString()}`);
         
-        // Log details of upcoming jobs
         const upcomingJobs = queuedJobs.slice(0, 3);
         upcomingJobs.forEach((job, index) => {
           const timeUntilRun = job.attrs.nextRunAt ? job.attrs.nextRunAt.getTime() - now.getTime() : 0;
@@ -104,7 +102,6 @@ async function logQueueStatus() {
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function processScheduledMessageJob(job: any, agenda: Agenda) {
   const { deliveryId } = job.attrs.data as { deliveryId: string };
   const startTime = new Date();
@@ -115,18 +112,11 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
   try {
     console.log(`[Worker] Processing scheduled message job for delivery ${deliveryId} at ${startTime.toISOString()}`);
     
-    if (!deliveryId) {
-      console.error('[Worker] No deliveryId provided in job data');
-      return;
-    }
-
     const db = agenda._mdb;
     delivery = await db.collection('messagedeliveries').findOne({ _id: new ObjectId(deliveryId) }) as MessageDelivery | null;
     
     if (!delivery) {
       console.error(`[Worker] Delivery not found for ID: ${deliveryId}`);
-      
-      // Clean up the orphaned job from agendaJobs collection
       try {
         await db.collection('agendaJobs').deleteOne({ 
           name: 'send-scheduled-message',
@@ -141,8 +131,6 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
     
     if (delivery.status !== 'queued') {
       console.log(`[Worker] Delivery ${deliveryId} is not queued (status: ${delivery.status}), skipping`);
-      
-      // Clean up the job from agendaJobs collection since it's not in queued status
       try {
         await db.collection('agendaJobs').deleteOne({ 
           name: 'send-scheduled-message',
@@ -253,7 +241,6 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
         } else {
           console.log(`[Worker] 🚫 Max retries reached for delivery ${deliveryId}, deleting failed delivery`);
           
-          // Delete the failed delivery from messagedeliveries collection
           try {
             await db.collection('messagedeliveries').deleteOne({ _id: delivery._id });
             console.log(`[Worker] 🗑️ Deleted failed delivery from messagedeliveries for delivery ${deliveryId}`);
@@ -261,7 +248,6 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
             console.error(`[Worker] Failed to delete delivery from messagedeliveries for delivery ${deliveryId}:`, deleteError);
           }
           
-          // Also delete the associated message from messages collection
           try {
             await db.collection('messages').deleteOne({ _id: delivery.messageId });
             console.log(`[Worker] 🗑️ Deleted associated message from messages for delivery ${deliveryId}`);
@@ -281,16 +267,12 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
         console.log(`[Worker] 🔄 Retry scheduled for delivery ${deliveryId} (attempt ${failCount}/3) at ${retryTime.toISOString()}`);
       } else {
         console.log(`[Worker] 🚫 Max retries reached for delivery ${deliveryId}, deleting failed delivery`);
-        
-        // Delete the failed delivery from messagedeliveries collection
         try {
           await db.collection('messagedeliveries').deleteOne({ _id: delivery._id });
           console.log(`[Worker] 🗑️ Deleted failed delivery from messagedeliveries for delivery ${deliveryId}`);
         } catch (deleteError) {
           console.error(`[Worker] Failed to delete delivery from messagedeliveries for delivery ${deliveryId}:`, deleteError);
         }
-        
-        // Also delete the associated message from messages collection
         try {
           await db.collection('messages').deleteOne({ _id: delivery.messageId });
           console.log(`[Worker] 🗑️ Deleted associated message from messages for delivery ${deliveryId}`);
@@ -302,7 +284,6 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
   } catch (error) {
     console.error(`[Worker] 💥 Exception processing job:`, error);
   } finally {
-    // Always remove the job from Agenda.js and agendaJobs collection
     try {
       console.log(`[Worker] 🔍 [FINALLY] Attempting to remove job from Agenda.js queue for delivery ${deliveryId}`);
       if (typeof job.remove === 'function') {
@@ -329,12 +310,10 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 agenda.define('send-scheduled-message', { concurrency: 2 }, async (job: any) => {
   await processScheduledMessageJob(job, agenda);
 });
 
-// Create a simple HTTP server for Render health checks
 const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ 
@@ -355,16 +334,14 @@ const PORT = parseInt(process.env.PORT || '3001', 10);
     await Promise.race([startPromise, timeout]);
     console.log('[Worker] Agenda started');
     
-    // Start HTTP server after Agenda is ready
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`[Worker] HTTP server listening on port ${PORT}`);
       console.log(`[Worker] Health check available at http://0.0.0.0:${PORT}`);
     });
     
-    // Start periodic queue status logging
     setInterval(async () => {
       await logQueueStatus();
-    }, 10000); // Check every 10 seconds
+    }, 10000);
     
     console.log('[Worker] Queue monitoring started (every 10 seconds)');
     
@@ -374,7 +351,6 @@ const PORT = parseInt(process.env.PORT || '3001', 10);
   }
 })();
 
-// Graceful shutdown
 process.on('SIGTERM', async () => {
   console.log('[Worker] Received SIGTERM, shutting down gracefully...');
   server.close(() => {
