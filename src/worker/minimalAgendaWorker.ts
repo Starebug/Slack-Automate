@@ -237,6 +237,18 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
           },
         }
       );
+      
+      // Delete the successful job from agendaJobs collection
+      try {
+        await db.collection('agendaJobs').deleteOne({ 
+          name: 'send-scheduled-message',
+          'data.deliveryId': deliveryId 
+        });
+        console.log(`[Worker] 🗑️ Deleted successful job from agendaJobs for delivery ${deliveryId}`);
+      } catch (deleteError) {
+        console.error(`[Worker] Failed to delete successful job from agendaJobs for delivery ${deliveryId}:`, deleteError);
+      }
+      
       console.log(`[Worker] ✅ Message sent successfully for delivery ${deliveryId} in ${processingTime}ms`);
     } else {
       console.log(`[Worker] ❌ Slack API error for delivery ${deliveryId}: ${responseData.error}`);
@@ -246,7 +258,7 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
         await agenda.schedule(retryTime, 'send-scheduled-message', { deliveryId });
         console.log(`[Worker] 🔄 Retry scheduled for delivery ${deliveryId} (attempt ${failCount}/3) at ${retryTime.toISOString()}`);
       } else {
-        console.log(`[Worker] 🚫 Max retries reached for delivery ${deliveryId}, marking as failed`);
+        console.log(`[Worker] 🚫 Max retries reached for delivery ${deliveryId}, deleting failed delivery`);
         
         // Delete the job from agendaJobs collection when max retries reached
         try {
@@ -258,22 +270,23 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
         } catch (deleteError) {
           console.error(`[Worker] Failed to delete job from agendaJobs for delivery ${deliveryId}:`, deleteError);
         }
-      }
-      
-      await db.collection('messagedeliveries').updateOne(
-        { _id: delivery._id },
-        {
-          $set: { status: 'failed' },
-          $push: {
-            attempts: { $each: [ {
-              timestamp: new Date(),
-              status: 'failure',
-              error: responseData.error,
-              response: responseData,
-            } ] }
-          },
+        
+        // Delete the failed delivery from messagedeliveries collection
+        try {
+          await db.collection('messagedeliveries').deleteOne({ _id: delivery._id });
+          console.log(`[Worker] 🗑️ Deleted failed delivery from messagedeliveries for delivery ${deliveryId}`);
+        } catch (deleteError) {
+          console.error(`[Worker] Failed to delete delivery from messagedeliveries for delivery ${deliveryId}:`, deleteError);
         }
-      );
+        
+        // Also delete the associated message from messages collection
+        try {
+          await db.collection('messages').deleteOne({ _id: delivery.messageId });
+          console.log(`[Worker] 🗑️ Deleted associated message from messages for delivery ${deliveryId}`);
+        } catch (deleteError) {
+          console.error(`[Worker] Failed to delete message from messages for delivery ${deliveryId}:`, deleteError);
+        }
+      }
     }
   } catch (error) {
     const failCount = (delivery.attempts?.length || 0) + 1;
@@ -286,7 +299,7 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
       await agenda.schedule(retryTime, 'send-scheduled-message', { deliveryId });
       console.log(`[Worker] 🔄 Retry scheduled for delivery ${deliveryId} (attempt ${failCount}/3) at ${retryTime.toISOString()}`);
     } else {
-      console.log(`[Worker] 🚫 Max retries reached for delivery ${deliveryId}, marking as failed`);
+      console.log(`[Worker] 🚫 Max retries reached for delivery ${deliveryId}, deleting failed delivery`);
       
       // Delete the job from agendaJobs collection when max retries reached
       try {
@@ -298,21 +311,23 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
       } catch (deleteError) {
         console.error(`[Worker] Failed to delete job from agendaJobs for delivery ${deliveryId}:`, deleteError);
       }
-    }
-    
-    await db.collection('messagedeliveries').updateOne(
-      { _id: delivery._id },
-      {
-        $set: { status: 'failed' },
-        $push: {
-          attempts: { $each: [ {
-            timestamp: new Date(),
-            status: 'failure',
-            error: error instanceof Error ? error.message : 'Unknown error',
-          } ] }
-        },
+      
+      // Delete the failed delivery from messagedeliveries collection
+      try {
+        await db.collection('messagedeliveries').deleteOne({ _id: delivery._id });
+        console.log(`[Worker] 🗑️ Deleted failed delivery from messagedeliveries for delivery ${deliveryId}`);
+      } catch (deleteError) {
+        console.error(`[Worker] Failed to delete delivery from messagedeliveries for delivery ${deliveryId}:`, deleteError);
       }
-    );
+      
+      // Also delete the associated message from messages collection
+      try {
+        await db.collection('messages').deleteOne({ _id: delivery.messageId });
+        console.log(`[Worker] 🗑️ Deleted associated message from messages for delivery ${deliveryId}`);
+      } catch (deleteError) {
+        console.error(`[Worker] Failed to delete message from messages for delivery ${deliveryId}:`, deleteError);
+      }
+    }
   }
 }
 
