@@ -46,6 +46,29 @@ A modern, secure Slack workspace integration application built with Next.js for 
 6. **Open your browser**
    Navigate to [http://localhost:3000](http://localhost:3000)
 
+### Running the Worker Locally (for Scheduled Messages)
+
+To test scheduled message functionality, you need to run the background worker:
+
+1. **Start the worker in a separate terminal**
+   ```bash
+   # In a new terminal window/tab
+   cd slackconnect
+   pnpm run worker
+   ```
+
+2. **Verify worker is running**
+   - You should see: `[Worker] Agenda ready!`
+   - Health check available at: `http://localhost:3001`
+   - Queue status logs every 30 seconds
+
+3. **Test scheduled messages**
+   - Schedule a message in the web app
+   - Watch the worker logs for job processing
+   - Messages will be sent at the scheduled time
+
+**Note**: The worker must be running for scheduled messages to be delivered. In production, deploy the worker as a separate service.
+
 ### Running with ngrok (for external access)
 
 If you need to test the app from external devices or share it with others, you can use ngrok:

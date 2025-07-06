@@ -99,6 +99,18 @@ export async function POST(request: NextRequest) {
         throw error;
       }
     } else {
+      // Convert IST datetime-local input to UTC for proper storage
+      // User selects 10:41 AM IST, should be stored as 5:11 AM UTC
+      const istDate = new Date(scheduledTime);
+      const utcDate = new Date(istDate.getTime() - (5.5 * 60 * 60 * 1000)); // Subtract 5:30 hours
+      
+      console.log('[ScheduledMessage] Timezone conversion:', {
+        userInput: scheduledTime,
+        istTime: istDate.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
+        utcTime: utcDate.toISOString(),
+        utcTimeIST: utcDate.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+      });
+
       const messageRecord = new Message({
         userId: user._id,
         text: message,
@@ -111,7 +123,7 @@ export async function POST(request: NextRequest) {
         slackUserId: session.slackUserId,
         slackChannelId: channelId,
         type: 'scheduled',
-        scheduledTime: new Date(scheduledTime),
+        scheduledTime: utcDate,
         status: 'queued',
       });
       await deliveryRecord.save();
@@ -123,7 +135,7 @@ export async function POST(request: NextRequest) {
         data: { deliveryId: deliveryRecord._id.toString() },
         type: 'normal',
         priority: 0,
-        nextRunAt: new Date(scheduledTime),
+        nextRunAt: utcDate,
         lastModifiedBy: null,
         lockedAt: null,
         lastRunAt: null,
@@ -140,7 +152,8 @@ export async function POST(request: NextRequest) {
         userId: user._id.toString(),
         channelId,
         message,
-        scheduledTime
+        scheduledTime,
+        storedUTC: utcDate.toISOString()
       });
 
       return NextResponse.json({ 
