@@ -88,6 +88,13 @@ async function logQueueStatus() {
       
       if (queuedJobs.length > 0) {
         console.log(`  - Next job scheduled for: ${queuedJobs[0].attrs.nextRunAt?.toISOString()}`);
+        
+        // Log details of upcoming jobs
+        const upcomingJobs = queuedJobs.slice(0, 3);
+        upcomingJobs.forEach((job, index) => {
+          const timeUntilRun = job.attrs.nextRunAt ? job.attrs.nextRunAt.getTime() - now.getTime() : 0;
+          console.log(`    Job ${index + 1}: ${job.attrs.nextRunAt?.toISOString()} (in ${Math.round(timeUntilRun / 1000)}s)`);
+        });
       }
       
       lastQueueCheck = now;
@@ -114,11 +121,33 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
   
   if (!delivery) {
     console.error(`[Worker] Delivery not found for ID: ${deliveryId}`);
+    
+    // Clean up the orphaned job from agendaJobs collection
+    try {
+      await db.collection('agendaJobs').deleteOne({ 
+        name: 'send-scheduled-message',
+        'data.deliveryId': deliveryId 
+      });
+      console.log(`[Worker] 🗑️ Deleted orphaned job from agendaJobs for delivery ${deliveryId}`);
+    } catch (deleteError) {
+      console.error(`[Worker] Failed to delete orphaned job from agendaJobs for delivery ${deliveryId}:`, deleteError);
+    }
     return;
   }
   
   if (delivery.status !== 'queued') {
     console.log(`[Worker] Delivery ${deliveryId} is not queued (status: ${delivery.status}), skipping`);
+    
+    // Clean up the job from agendaJobs collection since it's not in queued status
+    try {
+      await db.collection('agendaJobs').deleteOne({ 
+        name: 'send-scheduled-message',
+        'data.deliveryId': deliveryId 
+      });
+      console.log(`[Worker] 🗑️ Deleted non-queued job from agendaJobs for delivery ${deliveryId}`);
+    } catch (deleteError) {
+      console.error(`[Worker] Failed to delete non-queued job from agendaJobs for delivery ${deliveryId}:`, deleteError);
+    }
     return;
   }
   
@@ -218,6 +247,17 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
         console.log(`[Worker] 🔄 Retry scheduled for delivery ${deliveryId} (attempt ${failCount}/3) at ${retryTime.toISOString()}`);
       } else {
         console.log(`[Worker] 🚫 Max retries reached for delivery ${deliveryId}, marking as failed`);
+        
+        // Delete the job from agendaJobs collection when max retries reached
+        try {
+          await db.collection('agendaJobs').deleteOne({ 
+            name: 'send-scheduled-message',
+            'data.deliveryId': deliveryId 
+          });
+          console.log(`[Worker] 🗑️ Deleted failed job from agendaJobs for delivery ${deliveryId}`);
+        } catch (deleteError) {
+          console.error(`[Worker] Failed to delete job from agendaJobs for delivery ${deliveryId}:`, deleteError);
+        }
       }
       
       await db.collection('messagedeliveries').updateOne(
@@ -247,6 +287,17 @@ async function processScheduledMessageJob(job: any, agenda: Agenda) {
       console.log(`[Worker] 🔄 Retry scheduled for delivery ${deliveryId} (attempt ${failCount}/3) at ${retryTime.toISOString()}`);
     } else {
       console.log(`[Worker] 🚫 Max retries reached for delivery ${deliveryId}, marking as failed`);
+      
+      // Delete the job from agendaJobs collection when max retries reached
+      try {
+        await db.collection('agendaJobs').deleteOne({ 
+          name: 'send-scheduled-message',
+          'data.deliveryId': deliveryId 
+        });
+        console.log(`[Worker] 🗑️ Deleted failed job from agendaJobs for delivery ${deliveryId}`);
+      } catch (deleteError) {
+        console.error(`[Worker] Failed to delete job from agendaJobs for delivery ${deliveryId}:`, deleteError);
+      }
     }
     
     await db.collection('messagedeliveries').updateOne(
